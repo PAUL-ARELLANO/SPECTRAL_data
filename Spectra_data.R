@@ -1,109 +1,111 @@
 ################################################################################
-# R SCRIPT: ASD SPECTRAL DATA CONSOLIDATOR (spectrolab FIX)
+# R SCRIPT: ASD SPECTRAL DATA CONSOLIDATOR (Recursive Version)
 #
 # PURPOSE:
-# This script reads multiple binary ASD spectral files (from a directory) 
-# using the 'spectrolab' package and exports the consolidated spectral data
-# into a single, clean CSV file in wide format (Wavelengths in rows, 
-# Samples in columns).
-#
-# COMPATIBILITY NOTES (Crucial Fixes for specific spectrolab versions):
-# 1. READ METHOD: Uses 'path =' instead of 'files =' in read_spectra().
-# 2. DATA ACCESS: Bypasses non-exported functions (like metadata(), names(), 
-#    sample_names()) by directly accessing list elements for names and bands.
-# 3. EXTRACTION: Uses t(spectrolab::value(x)) to robustly extract and transpose
-#    the reflectance matrix, as recommended by the package author.
-#
-# INPUT:
-# - A single directory containing multiple .asd files.
-#
-# OUTPUT:
-# - One CSV file in wide format (Wavelength | Sample_1 | Sample_2 | ...).
-#
-# REQUIRED LIBRARIES:
-# - spectrolab
-# - dplyr
-# - tidyr
+# Recursively scan a root directory for *all* subfolders that contain .asd files,
+# process each folder using spectrolab, and save the processed CSV files into
+# a mirrored directory structure under the OUTPUT root directory.
 ################################################################################
-# Autor: Paul Arellano, PhD
-# Date: November 09, 2025
-# -------------------------------------------------------------
 
-
-# 1. Load Required Libraries
 library(spectrolab)
 library(stringr)
 library(dplyr)
 library(tidyr)
+library(fs)   # for recursive directory operations
 
-# --- Configuration ---
-input_path <- "C:/Users/pa589/NAU/TREE_STRESS/FIELDWORK_2025/SPECTRA/Mormon_Lake"
-output_dir <- "C:/Users/pa589/NAU/TREE_STRESS/FIELDWORK_2025/SPECTRA/Mormon_Lake/OUTPUT"
-output_filename <- "spectra_consolidated_output_FINAL_WORKING.csv"
-full_output_path <- file.path(output_dir, output_filename)
+# -------------------------------------------------------------------------
+# USER CONFIGURATION
+# -------------------------------------------------------------------------
 
-# -------------------------------------------------------------
+input_root  <- "C:/Users/pa589/NAU/TREE_STRESS/FIELDWORK_overall/SPECTRAL/2024/Original"
+output_root <- "C:/Users/pa589/NAU/TREE_STRESS/FIELDWORK_overall/SPECTRAL/2024/Preprocessed"
 
-# 2. Define the Conversion Function
-asd_to_csv_R <- function(input_path, full_output_path) {
+# -------------------------------------------------------------------------
+# FUNCTION: Convert ASD to CSV for one folder
+# -------------------------------------------------------------------------
+
+asd_to_csv_R <- function(input_path, output_folder) {
   
-  cat("Loading spectra from directory:", input_path, "\n")
+  cat("\n----------------------------------------\n")
+  cat("Processing folder:", input_path, "\n")
   
-  # Check and Create Output Directory
-  if (!dir.exists(dirname(full_output_path))) {
-    dir.create(dirname(full_output_path), recursive = TRUE)
+  # Create the output folder if needed
+  if (!dir.exists(output_folder)) {
+    dir.create(output_folder, recursive = TRUE)
   }
   
-  # Load Data using spectrolab::read_spectra()
+  # Build output file name
+  output_filename <- paste0(basename(input_path), "_spectra_consolidated.csv")
+  full_output_path <- file.path(output_folder, output_filename)
+  
+  # Try reading spectra:
   tryCatch({
     
     spectra_collection <- spectrolab::read_spectra(
-      path = input_path, 
+      path = input_path,
       format = "asd"
     )
     
     if (length(spectra_collection) == 0) {
-      stop("0 ASD files were successfully read by spectrolab. Check directory contents.")
+      cat("⚠️ No ASD files found here. Skipping.\n")
+      return(NULL)
     }
     
-    cat("Successfully loaded", length(spectra_collection), "spectra.\n")
+    cat("   Loaded:", length(spectra_collection), "ASD spectra\n")
     
-    # --------------------------------------------------------
-    # 3. Final Corrected Data Extraction and Tidy
-    # --------------------------------------------------------
+    # Extract reflectance matrix
+    reflectance_matrix <- t(spectrolab::value(spectra_collection))
     
-    # FIX 1: Extract the reflectance matrix using the 'value()' function, and transpose it.
-    reflectance_matrix <- t(spectrolab::value(spectra_collection)) 
-    
-    # FINAL FIX: Retrieve the sample names directly from the list element '$names'
-    sample_names_vector <- spectra_collection$names 
-    
-    # Manually set the column names of the matrix (78 rows)
+    sample_names_vector <- spectra_collection$names
     colnames(reflectance_matrix) <- sample_names_vector
     
-    # Convert matrix to a base R data frame
-    spectra_df_tidy <- as.data.frame(reflectance_matrix)
+    spectra_df <- as.data.frame(reflectance_matrix)
+    spectra_df$Wavelength <- spectra_collection$bands
+    spectra_df <- spectra_df %>% dplyr::select(Wavelength, everything())
     
-    # Retrieve the Wavelengths directly from the list element '$bands'
-    spectra_df_tidy$Wavelength <- spectra_collection$bands 
+    # Write CSV
+    write.csv(spectra_df, file = full_output_path, row.names = FALSE)
     
-    # Reorder columns: Wavelength first, then the spectra
-    spectra_df_tidy <- spectra_df_tidy %>%
-      dplyr::select(Wavelength, everything())
+    cat("   ✔ Exported:", full_output_path, "\n")
+    cat("   ✔ Dimensions:", paste(dim(spectra_df), collapse = " x "), "\n")
     
   }, error = function(e) {
-    message("\n🚨 Process failed during data extraction or loading.")
-    stop(paste("Process aborted. Reason:", e$message))
+    cat("❌ ERROR processing folder:", input_path, "\n")
+    cat("   Reason:", e$message, "\n")
   })
-  
-  # 4. Export to CSV
-  write.csv(spectra_df_tidy, file = full_output_path, row.names = FALSE)
-  
-  cat("\n✅ Data successfully consolidated and exported to:\n")
-  cat("  ", full_output_path, "\n")
-  cat("   Exported data shape (rows x columns):", paste(dim(spectra_df_tidy), collapse = " x "), "\n")
 }
 
-# --- Execution ---
-# Run the function
-asd_to_csv_R(input_path, full_output_path)
+# -------------------------------------------------------------------------
+# MAIN PROCESS: Walk all subfolders recursively
+# -------------------------------------------------------------------------
+
+cat("\nScanning directories recursively under:\n", input_root, "\n")
+
+# Get all subfolders (recursive = TRUE)
+all_dirs <- dir_ls(input_root, type = "directory", recurse = TRUE)
+
+# Include root folder itself
+all_dirs <- c(input_root, all_dirs)
+
+cat("Found", length(all_dirs), "folders.\n")
+
+for (folder in all_dirs) {
+  
+  # Check if folder contains ASD files
+  asd_files <- dir(pattern = "\\.asd$", path = folder, full.names = TRUE)
+  
+  if (length(asd_files) > 0) {
+    cat("\n📂 ASD files found in:", folder, "\n")
+    
+    # Build the relative path
+    relative_path <- path_rel(folder, start = input_root)
+    
+    # Build mirrored output folder
+    output_folder <- file.path(output_root, relative_path)
+    
+    # Process folder
+    asd_to_csv_R(folder, output_folder)
+  }
+}
+
+cat("\n\n🎉 ALL PROCESSING COMPLETE!\n")
