@@ -1,111 +1,93 @@
 ################################################################################
-# R SCRIPT: ASD SPECTRAL DATA CONSOLIDATOR (Recursive Version)
+# R SCRIPT: ASD SPECTRAL DATA CONSOLIDATOR – MULTI-FOLDER VERSION
 #
-# PURPOSE:
-# Recursively scan a root directory for *all* subfolders that contain .asd files,
-# process each folder using spectrolab, and save the processed CSV files into
-# a mirrored directory structure under the OUTPUT root directory.
+# This version:
+#   1) Iterates over all subfolders in the "Original" directory
+#   2) Creates matching subfolders in the "Preprossed" directory
+#   3) Runs your ASD → CSV converter for each folder
 ################################################################################
 
 library(spectrolab)
 library(stringr)
 library(dplyr)
 library(tidyr)
-library(fs)   # for recursive directory operations
 
-# -------------------------------------------------------------------------
-# USER CONFIGURATION
-# -------------------------------------------------------------------------
+# --------------------------------------------------------------------
+# 1. Base directories
+# --------------------------------------------------------------------
 
-input_root  <- "C:/Users/pa589/NAU/TREE_STRESS/FIELDWORK_overall/SPECTRAL/2024/Original"
-output_root <- "C:/Users/pa589/NAU/TREE_STRESS/FIELDWORK_overall/SPECTRAL/2024/Preprocessed"
+input_root  <- "C:/Users/pa589/NAU/TREE_STRESS/FIELDWORK_overall/SPECTRAL/2025/Original"
+output_root <- "C:/Users/pa589/NAU/TREE_STRESS/FIELDWORK_overall/SPECTRAL/2025/Preprocess"
 
-# -------------------------------------------------------------------------
-# FUNCTION: Convert ASD to CSV for one folder
-# -------------------------------------------------------------------------
+# --------------------------------------------------------------------
+# 2. Your ASD → CSV conversion function (unchanged except for messages)
+# --------------------------------------------------------------------
 
-asd_to_csv_R <- function(input_path, output_folder) {
+asd_to_csv_R <- function(input_path, output_folder, output_filename) {
   
-  cat("\n----------------------------------------\n")
+  full_output_path <- file.path(output_folder, output_filename)
+  
+  cat("-------------------------------------------------------------\n")
   cat("Processing folder:", input_path, "\n")
   
-  # Create the output folder if needed
   if (!dir.exists(output_folder)) {
     dir.create(output_folder, recursive = TRUE)
   }
   
-  # Build output file name
-  output_filename <- paste0(basename(input_path), "_spectra_consolidated.csv")
-  full_output_path <- file.path(output_folder, output_filename)
-  
-  # Try reading spectra:
   tryCatch({
-    
     spectra_collection <- spectrolab::read_spectra(
       path = input_path,
       format = "asd"
     )
     
     if (length(spectra_collection) == 0) {
-      cat("⚠️ No ASD files found here. Skipping.\n")
-      return(NULL)
+      stop("0 ASD files read. Check directory.")
     }
     
-    cat("   Loaded:", length(spectra_collection), "ASD spectra\n")
+    cat("Loaded", length(spectra_collection), "spectra\n")
     
-    # Extract reflectance matrix
+    # Extract reflectance + metadata
     reflectance_matrix <- t(spectrolab::value(spectra_collection))
-    
     sample_names_vector <- spectra_collection$names
     colnames(reflectance_matrix) <- sample_names_vector
     
     spectra_df <- as.data.frame(reflectance_matrix)
     spectra_df$Wavelength <- spectra_collection$bands
-    spectra_df <- spectra_df %>% dplyr::select(Wavelength, everything())
     
-    # Write CSV
-    write.csv(spectra_df, file = full_output_path, row.names = FALSE)
-    
-    cat("   ✔ Exported:", full_output_path, "\n")
-    cat("   ✔ Dimensions:", paste(dim(spectra_df), collapse = " x "), "\n")
+    spectra_df <- spectra_df %>% select(Wavelength, everything())
     
   }, error = function(e) {
-    cat("❌ ERROR processing folder:", input_path, "\n")
-    cat("   Reason:", e$message, "\n")
+    message("\n🚨 ERROR while processing folder: ", input_path)
+    stop(e$message)
   })
+  
+  write.csv(spectra_df, full_output_path, row.names = FALSE)
+  
+  cat("Saved CSV →", full_output_path, "\n")
+  cat("Rows x columns:", paste(dim(spectra_df), collapse = " x "), "\n")
 }
 
-# -------------------------------------------------------------------------
-# MAIN PROCESS: Walk all subfolders recursively
-# -------------------------------------------------------------------------
+# --------------------------------------------------------------------
+# 3. Iterate over ALL subfolders under input_root
+# --------------------------------------------------------------------
 
-cat("\nScanning directories recursively under:\n", input_root, "\n")
+subfolders <- list.dirs(input_root, full.names = TRUE, recursive = FALSE)
 
-# Get all subfolders (recursive = TRUE)
-all_dirs <- dir_ls(input_root, type = "directory", recurse = TRUE)
+cat("📂 Found", length(subfolders), "subfolders to process.\n")
 
-# Include root folder itself
-all_dirs <- c(input_root, all_dirs)
-
-cat("Found", length(all_dirs), "folders.\n")
-
-for (folder in all_dirs) {
+for (folder in subfolders) {
   
-  # Check if folder contains ASD files
-  asd_files <- dir(pattern = "\\.asd$", path = folder, full.names = TRUE)
+  folder_name <- basename(folder)  # e.g., "Plot_01"
   
-  if (length(asd_files) > 0) {
-    cat("\n📂 ASD files found in:", folder, "\n")
-    
-    # Build the relative path
-    relative_path <- path_rel(folder, start = input_root)
-    
-    # Build mirrored output folder
-    output_folder <- file.path(output_root, relative_path)
-    
-    # Process folder
-    asd_to_csv_R(folder, output_folder)
-  }
+  output_folder <- file.path(output_root, folder_name)
+  
+  output_filename <- paste0(folder_name, "_spectra_consolidated.csv")
+  
+  asd_to_csv_R(
+    input_path = folder,
+    output_folder = output_folder,
+    output_filename = output_filename
+  )
 }
 
-cat("\n\n🎉 ALL PROCESSING COMPLETE!\n")
+cat("\n🎉 ALL FOLDERS PROCESSED SUCCESSFULLY!\n")
